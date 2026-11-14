@@ -17,6 +17,12 @@ def make_env(render_mode=None):
     env = gym.wrappers.FrameStackObservation(env, stack_size=4)
     return env
 
+def get_floor(env):
+    # byte 33 of the game's memory is the player's height:
+    # 94 on the ground, 12 less for every floor climbed
+    y = int(env.unwrapped.ale.getRAM()[33])
+    return (94 - y) // 12
+
 class QNetwork(nn.Module):
     def __init__(self, n_actions):
         super().__init__()
@@ -117,6 +123,7 @@ if __name__ == "__main__":
     TARGET_UPDATE_EVERY = 1_000  # how often the target network is refreshed
     BATCH_SIZE = 32
     GAMMA = 0.99
+    FLOOR_BONUS = 2.0  # extra reward for reaching a new highest floor in this life
 
     env = make_env()
     n_actions = env.action_space.n
@@ -132,6 +139,7 @@ if __name__ == "__main__":
     obs, info = env.reset(seed=0)
     lives = info["lives"]        # how many lives we have right now
     print("Starting lives:", lives) 
+    best_floor = 0               # highest floor reached in this life
     episode_reward = 0
     episode_rewards = []
 
@@ -145,7 +153,15 @@ if __name__ == "__main__":
         life_lost = info["lives"] < lives
         lives = info["lives"]
         
-        buffer.add(obs, action, np.sign(reward), next_obs, terminated or life_lost)
+        shaped_reward = reward / 25
+        floor = get_floor(env)
+        if floor > best_floor:
+            shaped_reward += FLOOR_BONUS
+            best_floor = floor
+        if life_lost:
+            best_floor = 0  # the player restarts on the ground
+
+        buffer.add(obs, action, shaped_reward, next_obs, terminated or life_lost)
         obs = next_obs
         episode_reward += reward  # the real score, not the clipped one
 
@@ -163,6 +179,7 @@ if __name__ == "__main__":
             episode_reward = 0
             obs, info = env.reset()
             lives = info["lives"]
+            best_floor = 0
 
         # 4: learn
         if step >= LEARNING_STARTS and step % TRAIN_EVERY == 0:

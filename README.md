@@ -31,7 +31,7 @@ The environment is [`ALE/KingKong-v5`](https://ale.farama.org/environments/king_
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate.fish
 pip install -r requirements.txt
 ```
 
