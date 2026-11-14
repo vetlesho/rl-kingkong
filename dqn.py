@@ -10,6 +10,7 @@ gym.register_envs(ale_py)
 
 def make_env(render_mode=None):
     env = gym.make("ALE/KingKong-v5", frameskip=1, render_mode=render_mode)
+    #env = gym.make("ALE/Pong-v5", frameskip=1, render_mode=render_mode)
     env = gym.wrappers.AtariPreprocessing(
         env, frame_skip=4, screen_size=84, grayscale_obs=True
     )
@@ -37,7 +38,7 @@ class QNetwork(nn.Module):
         # pixels are 0-255; networks learn better with inputs between 0 and 1
         return self.net(x / 255.0)
 
-def get_epsilon(step, start=1.0, end=0.05, decay_steps=100_000):
+def get_epsilon(step, start=1.0, end=0.05, decay_steps=500_000):
     # slides linearly from start to end over decay_steps, then stays at end
     fraction = min(step / decay_steps, 1.0)
     return start + fraction * (end - start)
@@ -110,7 +111,7 @@ def train_step(q_net, target_net, optimizer, buffer, batch_size, gamma, device):
 
 
 if __name__ == "__main__":
-    TOTAL_STEPS = 500_000
+    TOTAL_STEPS = 3_000_000
     LEARNING_STARTS = 10_000     # collect this many steps before training begins
     TRAIN_EVERY = 4              # one training step per 4 game steps
     TARGET_UPDATE_EVERY = 1_000  # how often the target network is refreshed
@@ -129,6 +130,8 @@ if __name__ == "__main__":
     buffer = ReplayBuffer(capacity=50_000, obs_shape=env.observation_space.shape)
 
     obs, info = env.reset(seed=0)
+    lives = info["lives"]        # how many lives we have right now
+    print("Starting lives:", lives) 
     episode_reward = 0
     episode_rewards = []
 
@@ -137,20 +140,29 @@ if __name__ == "__main__":
         epsilon = get_epsilon(step)
         action = select_action(q_net, obs, epsilon, n_actions, device)
         next_obs, reward, terminated, truncated, info = env.step(action)
-        buffer.add(obs, action, np.sign(reward), next_obs, terminated)
+        
+        # did this step cost a life?
+        life_lost = info["lives"] < lives
+        lives = info["lives"]
+        
+        buffer.add(obs, action, np.sign(reward), next_obs, terminated or life_lost)
         obs = next_obs
         episode_reward += reward  # the real score, not the clipped one
 
         if terminated or truncated:
             episode_rewards.append(episode_reward)
             average = np.mean(episode_rewards[-20:])
+            average_100 = np.mean(episode_rewards[-100:])
             print(
                 f"step {step:>7} | episode {len(episode_rewards):>4} | "
                 f"reward {episode_reward:>6.0f} | avg(20) {average:>7.1f} | "
+                f"avg(100) {average_100:>7.1f} | "
                 f"epsilon {epsilon:.2f}"
+                
             )
             episode_reward = 0
             obs, info = env.reset()
+            lives = info["lives"]
 
         # 4: learn
         if step >= LEARNING_STARTS and step % TRAIN_EVERY == 0:
