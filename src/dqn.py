@@ -191,7 +191,7 @@ if __name__ == "__main__":
 
         # save progress so a crash or Ctrl+C doesn't lose everything
         if step % 50_000 == 0 and step > 0:
-            torch.save(q_net.state_dict(), "dqn_kingkong.pt")
+            torch.save(q_net.state_dict(), "models/dqn_kingkong.pt")
 
-    torch.save(q_net.state_dict(), "dqn_kingkong.pt")
+    torch.save(q_net.state_dict(), "models/dqn_kingkong.pt")
     env.close()

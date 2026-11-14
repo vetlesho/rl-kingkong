@@ -28,10 +28,10 @@ The environment is [`ALE/KingKong-v5`](https://ale.farama.org/environments/king_
 | `src/plot.py` | Plots the average score from one or more training logs. |
 | `src/find_height.py` | Lists the bytes of game memory that could hold the player's height. |
 | `logs/` | Training logs, one file per run. |
-| `dqn_kingkong_clipped.pt` | The best model so far. |
-| `dqn_kingkong.pt` | The model from the latest run. |
+| `models/dqn_kingkong_clipped.pt` | The best model so far. |
+| `models/dqn_kingkong.pt` | The model from the latest run. |
 
-Run everything from the repo root, since the models are saved and loaded there.
+Run everything from the repo root, since the paths to `models/` and `logs/` are relative to it.
 
 ## Running it
 
@@ -47,7 +47,7 @@ Train, and keep a log of the run:
 python -u src/dqn.py | tee logs/log.txt
 ```
 
-Three million steps take about two hours on a MacBook Air. The model is saved to `dqn_kingkong.pt` every 50,000 steps, so you can watch it or plot the log while training is still going:
+Three million steps take about two hours on a MacBook Air. The model is saved to `models/dqn_kingkong.pt` every 50,000 steps, so you can watch it or plot the log while training is still going:
 
 ```bash
 python src/watch.py
