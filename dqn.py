@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import random
 from collections import Counter
+import numpy as np
 
 gym.register_envs(ale_py)
 
@@ -50,6 +51,63 @@ def select_action(q_net, obs, epsilon, n_actions, device):
         q_values = q_net(obs_tensor)
         return q_values.argmax(dim=1).item() # exploit
 
+class ReplayBuffer: 
+    def __init__(self, capacity, obs_shape):
+        self.capacity = capacity
+        # uint8 keeps pixels as 0-255 whole numbers: 4x less memory than floats
+        self.obs = np.zeros((capacity, *obs_shape), dtype=np.uint8)
+        self.next_obs = np.zeros((capacity, *obs_shape), dtype=np.uint8)
+        self.actions = np.zeros(capacity, dtype=np.int64)
+        self.rewards = np.zeros(capacity, dtype=np.float32)
+        self.dones = np.zeros(capacity, dtype=np.float32)
+        self.position = 0  # where the next transition gets written
+        self.size = 0      # how many transitions are stored so far
+
+    def add(self, obs, action, reward, next_obs, done):
+        i = self.position
+        self.obs[i] = obs
+        self.actions[i] = action
+        self.rewards[i] = reward
+        self.next_obs[i] = next_obs
+        self.dones[i] = done
+        # when full, wrap around and overwrite the oldest transition
+        self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size, device):
+        idx = np.random.randint(0, self.size, size=batch_size)
+        return (
+            torch.tensor(self.obs[idx], dtype=torch.float32, device=device),
+            torch.tensor(self.actions[idx], device=device),
+            torch.tensor(self.rewards[idx], device=device),
+            torch.tensor(self.next_obs[idx], dtype=torch.float32, device=device),
+            torch.tensor(self.dones[idx], device=device),
+        )
+
+def train_step(q_net, target_net, optimizer, buffer, batch_size, gamma, device):
+    obs, actions, rewards, next_obs, dones = buffer.sample(batch_size, device)
+
+    # 1. Prediction: Q-values for all 6 actions, then keep only the one for the action that was actually taken
+    q_values = q_net(obs)                                         # shape (32, 6)
+    q_pred = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)  # shape (32,)
+
+    # 2. Target: reward + discounted best Q-value of the next screen
+    with torch.no_grad():
+        next_q = target_net(next_obs).max(dim=1).values
+        target = rewards + gamma * next_q * (1 - dones)  # (1 - dones) removes the future if the game ended
+
+    # 3. Loss: how far the prediction is from the target
+    loss = nn.functional.smooth_l1_loss(q_pred, target)
+
+    # 4. Nudge the weights to reduce the loss
+    optimizer.zero_grad()   # clear the nudges from last time
+    loss.backward()         # work out which direction to nudge each weight
+    nn.utils.clip_grad_norm_(q_net.parameters(), 10.0)  # cap the nudge size for stability
+    optimizer.step()        # apply the nudges
+
+    return loss.item()
+
+    
 env = make_env()
 obs, info = env.reset(seed=0)
 
@@ -62,17 +120,26 @@ print("Using device: ", device)
 
 q_net = QNetwork(env.action_space.n).to(device)
 
-for step in [0, 50_000, 100_000, 200_000]:
-    print(f"Epsilon at step {step}: {get_epsilon(step):.2f}")
+buffer = ReplayBuffer(capacity=50_000, obs_shape=env.observation_space.shape)
 
-# Play one episode at two different epsilons and count which actions get picked
-for epsilon in [1.0, 0.05]:
-    obs, info = env.reset()
-    counts = Counter()
-    done = False
-    while not done:
-        action = select_action(q_net, obs, epsilon, env.action_space.n, device)
-        counts[action] += 1
-        obs, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
-    print(f"epsilon={epsilon}: {sorted(counts.items())}")
+# Fill the buffer with 1000 random steps
+obs, info = env.reset()
+for step in range(1000):
+    action = env.action_space.sample()
+    next_obs, reward, terminated, truncated, info = env.step(action)
+    buffer.add(obs, action, np.sign(reward), next_obs, terminated)
+    obs = next_obs
+    if terminated or truncated:
+        obs, info = env.reset()
+
+print("Buffer size:", buffer.size)
+
+target_net = QNetwork(env.action_space.n).to(device)
+target_net.load_state_dict(q_net.state_dict())  # start as an exact copy
+
+optimizer = torch.optim.Adam(q_net.parameters(), lr=1e-4)
+
+for i in range(200):
+    loss = train_step(q_net, target_net, optimizer, buffer, 32, 0.99, device)
+    if i % 20 == 0:
+        print(f"train step {i}: loss = {loss:.5f}")
