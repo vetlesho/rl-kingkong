@@ -20,12 +20,18 @@ The environment is [`ALE/KingKong-v5`](https://ale.farama.org/environments/king_
 
 ## What's in the repo
 
-| File | What it does |
+| Path | What it is |
 | --- | --- |
-| `main.py` | Plays one game with random actions. Good for checking that the install works. |
-| `dqn.py` | The agent and the training loop. |
-| `watch.py` | Loads a trained model and plays a game in a window. |
-| `plot.py` | Plots the average score from one or more training logs. |
+| `src/main.py` | Plays one game with random actions. Good for checking that the install works. |
+| `src/dqn.py` | The agent and the training loop. |
+| `src/watch.py` | Loads a trained model and plays a game in a window. |
+| `src/plot.py` | Plots the average score from one or more training logs. |
+| `src/find_height.py` | Lists the bytes of game memory that could hold the player's height. |
+| `logs/` | Training logs, one file per run. |
+| `dqn_kingkong_clipped.pt` | The best model so far. |
+| `dqn_kingkong.pt` | The model from the latest run. |
+
+Run everything from the repo root, since the models are saved and loaded there.
 
 ## Running it
 
@@ -38,14 +44,14 @@ pip install -r requirements.txt
 Train, and keep a log of the run:
 
 ```bash
-python -u dqn.py | tee log.txt
+python -u src/dqn.py | tee logs/log.txt
 ```
 
 Three million steps take about two hours on a MacBook Air. The model is saved to `dqn_kingkong.pt` every 50,000 steps, so you can watch it or plot the log while training is still going:
 
 ```bash
-python watch.py
-python plot.py log.txt
+python src/watch.py
+python src/plot.py logs/log.txt
 ```
 
 ## The agent
@@ -65,19 +71,25 @@ The screen is turned into 84×84 grayscale, each action is held for 4 frames, an
 | Target network update | every 1,000 steps |
 | Training frequency | one update per 4 steps, after 10,000 warm-up steps |
 
-Two choices are specific to this game. Losing a life is stored as the end of an episode, although the game keeps going. Rewards are divided by 100, so a magic bomb and the top bonus stay worth more than an ordinary bomb.
+Three choices are specific to this game. Losing a life is stored as the end of an episode, although the game keeps going. Rewards are divided by 25, so a bomb is worth 1 and a magic bomb 5. The agent also gets a bonus of 2 the first time it reaches each floor in a life. The player's height is read from byte 33 of the game's memory.
 
 ## Results so far
 
 Random play scores about 100 points per game.
 
-| Run | Average over 100 games | What the agent does |
+| Run | Average over the last 100 games | What the agent does |
 | --- | --- | --- |
 | 500,000 steps, rewards clipped to +1 | about 100 | No better than random. |
-| 3,000,000 steps, rewards clipped to +1, life loss as episode end | about 410 | Stands on the ground floor and jumps bombs. It never climbs. |
-| 3,000,000 steps, rewards divided by 100 | in progress | |
+| 3,000,000 steps, rewards clipped to +1, life loss as episode end | about 410 | Climbs to the first floor and jumps bombs. It never gets to the second floor. |
+| 1,100,000 steps (stopped), rewards divided by 100 | about 65 | Worse than random. |
+| 850,000 steps (stopped), floor bonus paid on every step by mistake | about 15 | Climbs to the first floor and stops jumping. |
+| 3,000,000 steps, rewards divided by 25, floor bonus once per floor per life | about 55 | Stands still on the ground floor until a bomb hits it. |
 
-With clipped rewards the top bonus looked the same to the agent as a single bomb, which gave it no reason to climb. The current run tests whether scaled rewards change that. Raising gamma is next on the list, since at 0.99 the agent only looks about 7 seconds ahead.
+The clipped run is still the best one. Every run with unclipped rewards dropped below random once epsilon reached 0.05 and never recovered, though with one run per setting some of that may be luck.
+
+The ladders turned out to be the hard part: pressing up only works when the player is lined up with a ladder almost to the pixel, so random play rarely climbs.
+
+Next I want to keep training the clipped model with clipped rewards plus the floor bonus, to see whether it gets past the first floor.
 
 ## Sources
 
