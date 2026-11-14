@@ -107,39 +107,62 @@ def train_step(q_net, target_net, optimizer, buffer, batch_size, gamma, device):
 
     return loss.item()
 
-    
-env = make_env()
-obs, info = env.reset(seed=0)
 
-#print("Observation shape:", obs.shape)
-#print("Observation dtype:", obs.dtype)
-#print("Number of actions:", env.action_space.n)
 
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-print("Using device: ", device)
+if __name__ == "__main__":
+    TOTAL_STEPS = 500_000
+    LEARNING_STARTS = 10_000     # collect this many steps before training begins
+    TRAIN_EVERY = 4              # one training step per 4 game steps
+    TARGET_UPDATE_EVERY = 1_000  # how often the target network is refreshed
+    BATCH_SIZE = 32
+    GAMMA = 0.99
 
-q_net = QNetwork(env.action_space.n).to(device)
+    env = make_env()
+    n_actions = env.action_space.n
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    print("Using device:", device)
 
-buffer = ReplayBuffer(capacity=50_000, obs_shape=env.observation_space.shape)
+    q_net = QNetwork(n_actions).to(device)
+    target_net = QNetwork(n_actions).to(device)
+    target_net.load_state_dict(q_net.state_dict())
+    optimizer = torch.optim.Adam(q_net.parameters(), lr=1e-4)
+    buffer = ReplayBuffer(capacity=50_000, obs_shape=env.observation_space.shape)
 
-# Fill the buffer with 1000 random steps
-obs, info = env.reset()
-for step in range(1000):
-    action = env.action_space.sample()
-    next_obs, reward, terminated, truncated, info = env.step(action)
-    buffer.add(obs, action, np.sign(reward), next_obs, terminated)
-    obs = next_obs
-    if terminated or truncated:
-        obs, info = env.reset()
+    obs, info = env.reset(seed=0)
+    episode_reward = 0
+    episode_rewards = []
 
-print("Buffer size:", buffer.size)
+    for step in range(TOTAL_STEPS):
+        # 1-3: act, step the game, remember what happened
+        epsilon = get_epsilon(step)
+        action = select_action(q_net, obs, epsilon, n_actions, device)
+        next_obs, reward, terminated, truncated, info = env.step(action)
+        buffer.add(obs, action, np.sign(reward), next_obs, terminated)
+        obs = next_obs
+        episode_reward += reward  # the real score, not the clipped one
 
-target_net = QNetwork(env.action_space.n).to(device)
-target_net.load_state_dict(q_net.state_dict())  # start as an exact copy
+        if terminated or truncated:
+            episode_rewards.append(episode_reward)
+            average = np.mean(episode_rewards[-20:])
+            print(
+                f"step {step:>7} | episode {len(episode_rewards):>4} | "
+                f"reward {episode_reward:>6.0f} | avg(20) {average:>7.1f} | "
+                f"epsilon {epsilon:.2f}"
+            )
+            episode_reward = 0
+            obs, info = env.reset()
 
-optimizer = torch.optim.Adam(q_net.parameters(), lr=1e-4)
+        # 4: learn
+        if step >= LEARNING_STARTS and step % TRAIN_EVERY == 0:
+            train_step(q_net, target_net, optimizer, buffer, BATCH_SIZE, GAMMA, device)
 
-for i in range(200):
-    loss = train_step(q_net, target_net, optimizer, buffer, 32, 0.99, device)
-    if i % 20 == 0:
-        print(f"train step {i}: loss = {loss:.5f}")
+        # 5: refresh the frozen copy
+        if step % TARGET_UPDATE_EVERY == 0:
+            target_net.load_state_dict(q_net.state_dict())
+
+        # save progress so a crash or Ctrl+C doesn't lose everything
+        if step % 50_000 == 0 and step > 0:
+            torch.save(q_net.state_dict(), "dqn_kingkong.pt")
+
+    torch.save(q_net.state_dict(), "dqn_kingkong.pt")
+    env.close()
