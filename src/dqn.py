@@ -117,7 +117,11 @@ def train_step(q_net, target_net, optimizer, buffer, batch_size, gamma, device):
 
 
 if __name__ == "__main__":
-    TOTAL_STEPS = 3_000_000
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+
+    TOTAL_STEPS = 6_000_000
     LEARNING_STARTS = 10_000     # collect this many steps before training begins
     TRAIN_EVERY = 4              # one training step per 4 game steps
     TARGET_UPDATE_EVERY = 1_000  # how often the target network is refreshed
@@ -131,10 +135,11 @@ if __name__ == "__main__":
     print("Using device:", device)
 
     q_net = QNetwork(n_actions).to(device)
+    q_net.load_state_dict(torch.load("models/dqn_kingkong_clipped.pt", map_location=device))
     target_net = QNetwork(n_actions).to(device)
     target_net.load_state_dict(q_net.state_dict())
     optimizer = torch.optim.Adam(q_net.parameters(), lr=1e-4)
-    buffer = ReplayBuffer(capacity=50_000, obs_shape=env.observation_space.shape)
+    buffer = ReplayBuffer(capacity=100_000, obs_shape=env.observation_space.shape)
 
     obs, info = env.reset(seed=0)
     lives = info["lives"]        # how many lives we have right now
@@ -142,10 +147,13 @@ if __name__ == "__main__":
     best_floor = 0               # highest floor reached in this life
     episode_reward = 0
     episode_rewards = []
+    episode_top_floor = 0        # highest floor reached in this game
+    best_average = 0             # best avg(100) so far, for saving the best model
 
     for step in range(TOTAL_STEPS):
         # 1-3: act, step the game, remember what happened
-        epsilon = get_epsilon(step)
+        #epsilon = get_epsilon(step)    # when training new models
+        epsilon = 0.1                   # retrain from clipped model, giving some chance to randomness
         action = select_action(q_net, obs, epsilon, n_actions, device)
         next_obs, reward, terminated, truncated, info = env.step(action)
         
@@ -153,8 +161,10 @@ if __name__ == "__main__":
         life_lost = info["lives"] < lives
         lives = info["lives"]
         
-        shaped_reward = reward / 25
+        #shaped_reward = reward / 25    # old shaped reward
+        shaped_reward = np.sign(reward)
         floor = get_floor(env)
+        episode_top_floor = max(episode_top_floor, floor)
         if floor > best_floor:
             shaped_reward += FLOOR_BONUS
             best_floor = floor
@@ -173,10 +183,16 @@ if __name__ == "__main__":
                 f"step {step:>7} | episode {len(episode_rewards):>4} | "
                 f"reward {episode_reward:>6.0f} | avg(20) {average:>7.1f} | "
                 f"avg(100) {average_100:>7.1f} | "
+                f"top floor {episode_top_floor} | "
                 f"epsilon {epsilon:.2f}"
                 
             )
+            if len(episode_rewards) >= 100 and average_100 > best_average:
+                best_average = average_100
+                torch.save(q_net.state_dict(), "models/dqn_kingkong_best.pt")
+                
             episode_reward = 0
+            episode_top_floor = 0
             obs, info = env.reset()
             lives = info["lives"]
             best_floor = 0
