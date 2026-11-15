@@ -23,6 +23,14 @@ def get_floor(env):
     y = int(env.unwrapped.ale.getRAM()[33])
     return (94 - y) // 12
 
+def get_x(env):
+    # the player's shoes are the only grey pixels on the screen
+    screen = env.unwrapped.ale.getScreenRGB()
+    columns = np.nonzero((screen == 151).all(axis=2))[1]
+    if len(columns) == 0:
+        return None                  # the player is not on the screen
+    return int(columns.mean())
+
 NOOP, FIRE, UP, RIGHT, LEFT, DOWN = range(6)
 
 def new_demo():
@@ -48,6 +56,23 @@ def demo_action(env, demo):
     if demo["t"] % 3 == 0:
         return UP                    # try the ladder
     return demo["direction"]
+
+def middle_ladder_action(env, step):
+    # a script for floor 1: walk to the middle ladder and climb it
+    y = int(env.unwrapped.ale.getRAM()[33])
+    if y > 94:
+        return NOOP                  # intro or death animation
+    if (94 - y) % 12 != 0:
+        return UP                    # between two floors = on a ladder
+    x = get_x(env)
+    if x is None:
+        return NOOP
+    direction = RIGHT if x < 80 else LEFT
+    if abs(x - 80) > 8:
+        return direction             # far from the ladder: just walk
+    if step % 2 == 0:
+        return UP                    # close: try the ladder every other step
+    return direction
 
 class QNetwork(nn.Module):
     def __init__(self, n_actions):
@@ -147,14 +172,14 @@ if __name__ == "__main__":
     np.random.seed(0)
     torch.manual_seed(0)
 
-    TOTAL_STEPS = 6_000_000
+    TOTAL_STEPS = 2_000_000
     LEARNING_STARTS = 10_000        # collect this many steps before training begins
     TRAIN_EVERY = 4                 # one training step per 4 game steps
     TARGET_UPDATE_EVERY = 1_000     # how often the target network is refreshed
     BATCH_SIZE = 32
     GAMMA = 0.99
     FLOOR_BONUS = 2.0               # extra reward for reaching a new highest floor in this life
-    DEMO_PROB = 0.3                 # share of lives where the script climbs the first ladder
+    DEMO_PROB = 0.5                 # share of lives where the script climbs the first ladder
 
     env = make_env()
     n_actions = env.action_space.n
@@ -172,7 +197,8 @@ if __name__ == "__main__":
     lives = info["lives"]        # how many lives we have right now
     print("Starting lives:", lives) 
     best_floor = 0               # highest floor reached in this life
-    demo = new_demo() if random.random() < DEMO_PROB else None
+    demo_life = random.random() < DEMO_PROB   # does the script help in this life?
+    demo_on = False                           # is the script in control right now?
     episode_reward = 0           # the game score in this game
     episode_learn_reward = 0     # the reward the agent learns from, summed over this game
     episode_rewards = []
@@ -184,8 +210,8 @@ if __name__ == "__main__":
         #epsilon = get_epsilon(step)    # when training new models
         epsilon = 0.1                   # retrain from clipped model, giving some chance to randomness
         #action = select_action(q_net, obs, epsilon, n_actions, device)
-        if demo is not None:
-            action = demo_action(env, demo)
+        if demo_on:
+            action = middle_ladder_action(env, step)
         else:
             action = select_action(q_net, obs, epsilon, n_actions, device)
         next_obs, reward, terminated, truncated, info = env.step(action)
@@ -201,11 +227,11 @@ if __name__ == "__main__":
         if floor > best_floor:
             shaped_reward += FLOOR_BONUS
             best_floor = floor
-            if best_floor >= 2:
-                demo = None    # the agent takes over
+            demo_on = demo_life and best_floor == 1   # the script plays on floor 1 only
         if life_lost:
             best_floor = 0  # the player restarts on the ground
-            demo = new_demo() if random.random() < DEMO_PROB else None
+            demo_on = False
+            demo_life = random.random() < DEMO_PROB
 
         buffer.add(obs, action, shaped_reward, next_obs, terminated or life_lost)
         obs = next_obs
@@ -235,7 +261,8 @@ if __name__ == "__main__":
             obs, info = env.reset()
             lives = info["lives"]
             best_floor = 0
-            demo = new_demo() if random.random() < DEMO_PROB else None
+            demo_on = False
+            demo_life = random.random() < DEMO_PROB 
 
         # 4: learn
         if step >= LEARNING_STARTS and step % TRAIN_EVERY == 0:
