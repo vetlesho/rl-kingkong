@@ -5,7 +5,7 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 env = make_env(render_mode="human")
 
 q_net = QNetwork(env.action_space.n).to(device)
-q_net.load_state_dict(torch.load("models/dqn_kingkong.pt", map_location=device))
+q_net.load_state_dict(torch.load("models/dqn_kingkong_best.pt", map_location=device))
 
 obs, info = env.reset()
 done = False
