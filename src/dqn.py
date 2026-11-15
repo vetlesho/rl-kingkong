@@ -27,7 +27,8 @@ NOOP, FIRE, UP, RIGHT, LEFT, DOWN = range(6)
 
 def new_demo():
     # the script's memory: which way it walks, and a step counter
-    return {"direction": random.choice([LEFT, RIGHT]), "t": 0}
+    #return {"direction": random.choice([LEFT, RIGHT]), "t": 0}
+    return {"direction": random.choice([LEFT, RIGHT]), "t": 0, "floor": 0}
 
 def demo_action(env, demo):
     # a simple script that finds a ladder and climbs it
@@ -36,6 +37,11 @@ def demo_action(env, demo):
         return NOOP                  # intro or death animation
     if (94 - y) % 12 != 0:
         return UP                    # between two floors = on a ladder
+    floor = (94 - y) // 12
+    if floor != demo["floor"]:       # just arrived on a new floor: turn around
+        demo["floor"] = floor
+        demo["t"] = 0
+        demo["direction"] = LEFT if demo["direction"] == RIGHT else RIGHT
     demo["t"] += 1
     if demo["t"] % 200 == 0:         # no ladder this way, turn around
         demo["direction"] = LEFT if demo["direction"] == RIGHT else RIGHT
@@ -156,7 +162,7 @@ if __name__ == "__main__":
     print("Using device:", device)
 
     q_net = QNetwork(n_actions).to(device)
-    q_net.load_state_dict(torch.load("models/dqn_kingkong_clipped.pt", map_location=device))
+    q_net.load_state_dict(torch.load("models/dqn_kingkong_ladder1.pt", map_location=device))
     target_net = QNetwork(n_actions).to(device)
     target_net.load_state_dict(q_net.state_dict())
     optimizer = torch.optim.Adam(q_net.parameters(), lr=1e-4)
@@ -167,7 +173,8 @@ if __name__ == "__main__":
     print("Starting lives:", lives) 
     best_floor = 0               # highest floor reached in this life
     demo = new_demo() if random.random() < DEMO_PROB else None
-    episode_reward = 0
+    episode_reward = 0           # the game score in this game
+    episode_learn_reward = 0     # the reward the agent learns from, summed over this game
     episode_rewards = []
     episode_top_floor = 0        # highest floor reached in this game
     best_average = 0             # best avg(100) so far, for saving the best model
@@ -194,7 +201,8 @@ if __name__ == "__main__":
         if floor > best_floor:
             shaped_reward += FLOOR_BONUS
             best_floor = floor
-            demo = None
+            if best_floor >= 2:
+                demo = None    # the agent takes over
         if life_lost:
             best_floor = 0  # the player restarts on the ground
             demo = new_demo() if random.random() < DEMO_PROB else None
@@ -202,6 +210,7 @@ if __name__ == "__main__":
         buffer.add(obs, action, shaped_reward, next_obs, terminated or life_lost)
         obs = next_obs
         episode_reward += reward  # the real score, not the clipped one
+        episode_learn_reward += shaped_reward
 
         if terminated or truncated:
             episode_rewards.append(episode_reward)
@@ -209,7 +218,8 @@ if __name__ == "__main__":
             average_100 = np.mean(episode_rewards[-100:])
             print(
                 f"step {step:>7} | episode {len(episode_rewards):>4} | "
-                f"reward {episode_reward:>6.0f} | avg(20) {average:>7.1f} | "
+                f"score {episode_reward:>6.0f} | learn reward {episode_learn_reward:>5.1f} | "
+                f"avg(20) {average:>7.1f} | "
                 f"avg(100) {average_100:>7.1f} | "
                 f"top floor {episode_top_floor} | "
                 f"epsilon {epsilon:.2f}"
@@ -220,6 +230,7 @@ if __name__ == "__main__":
                 torch.save(q_net.state_dict(), "models/dqn_kingkong_best.pt")
 
             episode_reward = 0
+            episode_learn_reward = 0
             episode_top_floor = 0
             obs, info = env.reset()
             lives = info["lives"]
