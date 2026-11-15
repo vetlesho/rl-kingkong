@@ -25,6 +25,7 @@ The environment is [`ALE/KingKong-v5`](https://ale.farama.org/environments/king_
 | `src/main.py` | Plays one game with random actions. Good for checking that the install works. |
 | `src/dqn.py` | The agent and the training loop. |
 | `src/watch.py` | Loads a trained model and plays a game in a window. |
+| `src/evaluate.py` | Plays 30 games with one or more models, with no script, and reports the score and how often each floor was reached. |
 | `src/plot.py` | Plots the average score from one or more training logs. |
 | `src/find_height.py` | Lists the bytes of game memory that could hold the player's height. |
 | `logs/` | Training logs, one file per run. |
@@ -55,6 +56,15 @@ Two million steps take a bit over two hours on a MacBook Air. The model is saved
 python src/watch.py
 python src/plot.py logs/log.txt
 ```
+
+To measure how good a model is, let it play 30 games by itself. With no arguments this compares the two main models; you can also name the models and choose the number of games:
+
+```bash
+python src/evaluate.py
+python src/evaluate.py models/dqn_kingkong.pt --games 10
+```
+
+It prints the mean score with an estimate of how much of it is luck, and how many lives reached each floor by ladder or by magic bomb. Every model plays the same games, so the numbers can be compared. It takes about two minutes per model.
 
 ## The agent
 
