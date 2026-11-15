@@ -28,8 +28,10 @@ The environment is [`ALE/KingKong-v5`](https://ale.farama.org/environments/king_
 | `src/plot.py` | Plots the average score from one or more training logs. |
 | `src/find_height.py` | Lists the bytes of game memory that could hold the player's height. |
 | `logs/` | Training logs, one file per run. |
-| `models/dqn_kingkong_clipped.pt` | The best model so far. |
-| `models/dqn_kingkong.pt` | The model from the latest run. |
+| `models/dqn_kingkong_clipped.pt` | The highest-scoring model. It stays low in the building. |
+| `models/dqn_kingkong_demo3.pt` | The best all-rounder: scores almost as much and climbs higher. |
+| `models/dqn_kingkong_ladder1.pt`, `models/dqn_kingkong_demo2.pt` | Models from the earlier demonstration runs. |
+| `models/dqn_kingkong.pt`, `models/dqn_kingkong_best.pt` | The last and the best checkpoint of the latest run. Each new run overwrites them. |
 
 Run everything from the repo root, since the paths to `models/` and `logs/` are relative to it.
 
@@ -47,7 +49,7 @@ Train, and keep a log of the run:
 python -u src/dqn.py | tee logs/log.txt
 ```
 
-Three million steps take about two hours on a MacBook Air. The model is saved to `models/dqn_kingkong.pt` every 50,000 steps, so you can watch it or plot the log while training is still going:
+Two million steps take a bit over two hours on a MacBook Air. The model is saved to `models/dqn_kingkong.pt` every 50,000 steps, so you can watch it or plot the log while training is still going. The checkpoint with the best 100-game average goes to `models/dqn_kingkong_best.pt`.
 
 ```bash
 python src/watch.py
@@ -62,38 +64,56 @@ The screen is turned into 84×84 grayscale, each action is held for 4 frames, an
 
 | Setting | Value |
 | --- | --- |
-| Training steps | 3,000,000 |
+| Training steps | 2,000,000, starting from an earlier model |
 | Learning rate | 0.0001 (Adam) |
 | Gamma | 0.99 |
 | Batch size | 32 |
-| Replay buffer | 50,000 transitions |
-| Epsilon | 1.0 down to 0.05 over the first 500,000 steps |
+| Replay buffer | 100,000 transitions |
+| Epsilon | 0.1 when fine-tuning (1.0 down to 0.05 over 500,000 steps when training from scratch) |
 | Target network update | every 1,000 steps |
 | Training frequency | one update per 4 steps, after 10,000 warm-up steps |
 
-Three choices are specific to this game. Losing a life is stored as the end of an episode, although the game keeps going. Rewards are divided by 25, so a bomb is worth 1 and a magic bomb 5. The agent also gets a bonus of 2 the first time it reaches each floor in a life. The player's height is read from byte 33 of the game's memory.
+Some choices are specific to this game:
+
+- Losing a life is stored as the end of an episode, although the game keeps going.
+- Rewards are clipped to +1, so a bomb, a magic bomb and reaching the top all count the same.
+- The agent gets a bonus of 2 the first time it reaches each floor in a life. The player's height is read from byte 33 of the game's memory.
+- In half of the lives a small script takes over when the agent arrives on the first floor, walks to the middle ladder and climbs it. The agent learns from those steps like any others, since DQN can learn from actions it did not choose itself. The script finds the player from the grey pixels of his shoes.
+
+The log prints two numbers per game: `score` is the game's own points, and `learn reward` is the sum of what the agent was trained on.
 
 ## Results so far
 
-Random play scores about 100 points per game.
+Random play scores about 100 points per game. The first five runs are judged by the average score over the last 100 training games.
 
-| Run | Average over the last 100 games | What the agent does |
+| Run | Average score | What the agent does |
 | --- | --- | --- |
 | 500,000 steps, rewards clipped to +1 | about 100 | No better than random. |
-| 3,000,000 steps, rewards clipped to +1, life loss as episode end | about 410 | Climbs to the first floor and jumps bombs. It never gets to the second floor. |
+| 3,000,000 steps, rewards clipped to +1, life loss as episode end | about 410 | Jumps bombs on the ground floor. Magic bombs sometimes lift it to the first floor. |
 | 1,100,000 steps (stopped), rewards divided by 100 | about 65 | Worse than random. |
-| 850,000 steps (stopped), floor bonus paid on every step by mistake | about 15 | Climbs to the first floor and stops jumping. |
+| 850,000 steps (stopped), floor bonus paid on every step by mistake | about 15 | Reaches the first floor and stops jumping. |
 | 3,000,000 steps, rewards divided by 25, floor bonus once per floor per life | about 55 | Stands still on the ground floor until a bomb hits it. |
 
-The clipped run is still the best one. Every run with unclipped rewards dropped below random once epsilon reached 0.05 and never recovered, though with one run per setting some of that may be luck.
+The later runs all continue from an earlier model with clipped rewards and the floor bonus. The training log is misleading for these, because it also counts the lives where a script helped. So I played 15 games with each model, with no script, and counted how often it reached each floor in its 45 lives.
 
-The ladders turned out to be the hard part: pressing up only works when the player is lined up with a ladder almost to the pixel, so random play rarely climbs.
+| Model | Score | Floor 1 | Floor 2 | Floor 3 | Floor 4 |
+| --- | --- | --- | --- | --- | --- |
+| Clipped rewards only (`dqn_kingkong_clipped.pt`) | 427 | 24 | 4 | 0 | 0 |
+| A script climbs the middle ladder in half the lives (`dqn_kingkong_demo3.pt`) | 378 | 43 | 29 | 3 | 2 |
 
-Next I want to keep training the clipped model with clipped rewards plus the floor bonus, to see whether it gets past the first floor.
+What I learned along the way:
+
+- The floor bonus alone changed nothing in 6,000,000 steps. Pressing up only works when the player is lined up with a ladder almost to the pixel, so random actions never climb one, and the agent had no climb to learn from.
+- Showing it the climb worked for the first ladder. After a script climbed the ground-floor ladder in 30% of the lives, the agent took that ladder by itself in almost every life.
+- It did not work for the middle ladder on the first floor, in three runs. The walk there is about 100 steps with no reward on the way. The agent gets above the first floor by jumping magic bombs.
+- Every run peaked and then slid back, so the best checkpoint is better than the last one.
+
+Next I want to try Double DQN and a lower learning rate, to see if that stops the slide.
 
 ## Sources
 
 - [Playing Atari with Deep Reinforcement Learning](https://arxiv.org/abs/1312.5602) (Mnih et al., 2013)
 - [Human-level control through deep reinforcement learning](https://www.nature.com/articles/nature14236) (Mnih et al., 2015)
 - [Gymnasium documentation](https://gymnasium.farama.org/)
+- [Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732) (Hester et al., 2017)
 - [Arcade Learning Environment: King Kong](https://ale.farama.org/environments/king_kong/), which is also where the animation comes from
